@@ -91,6 +91,7 @@ class body:
             Patch.__class__ = art3d.PathPatch3D #Change the class
             Patch._code3d = path.codes #Copy the codes
             Patch._facecolor3d = Patch.get_facecolor #Get the face color    
+            Patch._axlim_clip = False
             verts = path.vertices #Get the vertices in 2D
             verts3D = np.zeros((len(verts), 3))
             verts3D[:, :2] = verts
@@ -194,6 +195,7 @@ class body:
             Patch.__class__ = art3d.PathPatch3D #Change the class
             Patch._code3d = path.codes #Copy the codes
             Patch._facecolor3d = Patch.get_facecolor #Get the face color    
+            Patch._axlim_clip = False
             verts = path.vertices #Get the vertices in 2D
             verts3D = np.zeros((len(verts), 3))
             verts3D[:, :2] = verts
