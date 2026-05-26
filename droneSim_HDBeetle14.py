@@ -175,71 +175,13 @@ state[0, 0, [9, 10, 11]] = np.array(simConfig['initial state conditions']['posit
 # NOTE: To leave certain states uncontrolled, set associated reference to np.nan
 reference = state.copy() 
 
-doRollPitchYawTrack = True *0     # NOTE: Incompatible with upset controller
-doMaxVel = True *0                # NOTE: Incompatible with upset controller
-doVelocityTrack = True *0
-doPositionTrack = simConfig['references']['do position track']
-doCircleTrack = simConfig['references']['do circle track']
-
-if doRollPitchYawTrack:
-    # Check controller
-    if controller.name == 'droneUpsetController_PID':
-        print('[ WARNING ] Upset controller PID not compatible with this reference command! Will not track.')
-    # Roll tracking 
-    reference[int(2/dt):int(4/dt), 0, 0] = 1 # Radian
-    # NOTE: Need to remove velocity control, along y, while giving pure attitude commands
-    reference[int(2/dt):int(4/dt), 0, 4] = np.nan # m/s
-    reference[int(2/dt):int(4/dt), 0, 10] = np.nan # m
-
-    # Pitch tracking 
-    reference[int(5/dt):int(7/dt), 0, 1] = 0.8 # Radian
-    # NOTE: Need to remove velocity control, along x, while giving pure attitude commands
-    reference[int(5/dt):int(7/dt), 0, 3] = np.nan # m/s
-    reference[int(5/dt):int(7/dt), 0, 9] = np.nan # m
-
-    # Yaw tracking 
-    reference[int(8/dt):, 0, 2] = 0.5 # Radian
-elif doMaxVel:
-    # Check controller
-    if controller.name == 'droneUpsetController_PID':
-        print('[ WARNING ] Upset controller PID not compatible with this reference command! Will not track.')
-    # Pitch tracking 
-    reference[int(2/dt):, 0, 1] = -1.5 # Radian
-    # Velocity along x
-    reference[int(2/dt):, 0, 3] = np.nan # m/s
-    # Position along x
-    reference[int(2/dt):, 0, 9] = np.nan # m
-elif doVelocityTrack:
-    # Velocity along x
-    reference[int(2/dt):int(4/dt), 0, 3] = 4
-    # Velocity along y
-    reference[int(3/dt):int(6/dt), 0, 4] = -3
-    # Velocity along z (Recall, z is +ve downwards)
-    reference[int(7/dt):, 0, 5] = -5
-elif doPositionTrack:
-    # Position in x, m
-    reference[int(6/dt):, 0, 9] = 4
-    # Position in y, m
-    reference[int(6/dt):, 0, 10] = -2
-    # Position in z, m (+ve downwards!)
-    reference[int(2/dt):, 0, 11] = -1
-elif doCircleTrack:
-    # # Position in x, m
-    # reference[int(1/dt):, 0, 9] = 4*np.sin(time[int(1/dt):])
-    # # Position in y, m
-    # reference[int(1/dt):, 0, 10] = 4*np.cos(time[int(1/dt):])
-    # # Position in z, m (+ve downwards!)
-    # reference[int(1/dt):, 0, 11] = -2
-
-    # Position in x, m
-    reference[int(1/dt):, 0, 9] = 3 * np.cos(time[int(1/dt):])
-    # Position in y, m
-    reference[int(1/dt):, 0, 10] = 3 * np.sin(time[int(1/dt):]) * np.cos(time[int(1/dt):])
-    # Position in z, m (+ve downwards!)
-    reference[int(1/dt):, 0, 11] = -2
-else:
-    # Hovering flight, all references @ 0
-    pass
+# Leminscate of gerono trajectory
+# Position in x, m
+reference[int(1/dt):, 0, 9] = 3 * np.cos(time[int(1/dt):])
+# Position in y, m
+reference[int(1/dt):, 0, 10] = 3 * np.sin(time[int(1/dt):]) * np.cos(time[int(1/dt):])
+# Position in z, m (+ve downwards!)
+reference[int(1/dt):, 0, 11] = -2
 
 
 # Define initial rotor speeds, set to idle
@@ -376,9 +318,19 @@ objectsPoses = {
 animator.posHorizon = int((tMax/2)/dt)
 animator.actors[simulator.model.modelID].actor.historyColor = 'mediumseagreen'
 tArray = [
+    # simulator.simVars['time'][int(0.3*len(simulator.simVars['time']))],
+    # simulator.simVars['time'][int(0.5*len(simulator.simVars['time']))],
+    # simulator.simVars['time'][int(0.75*len(simulator.simVars['time']))],
+    # simulator.simVars['time'][int(0.8*len(simulator.simVars['time']))],
+    # simulator.simVars['time'][int(0.9*len(simulator.simVars['time']))],
     simulator.simVars['time'][int(0.98*len(simulator.simVars['time']))]
     ]
-animator.asImage(objectsPoses, tArray, parentFig=fig)
+animator.asImage(objectsPoses, tArray, parentFig=fig, axisLims={'x':[-3, 3], 'y':[-1, 1], 'z':[-3, -2]})
+ax.set_position([0.02, 0.02, 0.99, 0.99])
+# ax.azim = -30
+# ax.elev = 16
+ax.azim = 69
+ax.elev = 30
 
 
 plotting.show()

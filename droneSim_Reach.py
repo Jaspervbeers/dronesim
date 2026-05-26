@@ -8,11 +8,12 @@ import numpy as np
 import sim
 import os
 import json
+import pickle as pkl
 
-# Check python version, since standalone models are mostly identified with python 3.8
-import sys
-if sys.version_info.major != 3 or sys.version_info.minor != 8:
-    print(f'[ WARNING ] Current Python version {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} may not be compatible with models (Python 3.8.12)')
+# # Check python version, since standalone models are mostly identified with python 3.8
+# import sys
+# if sys.version_info.major != 3 or sys.version_info.minor != 8:
+#     print(f'[ WARNING ] Current Python version {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} may not be compatible with models (Python 3.8.12)')
 
 '''
 Load simulation configuration
@@ -50,7 +51,6 @@ if not model.hasGravity:
     model.droneParams['g'] = 0
 
 
-
 # Get reference points to reach along the surface of a sphere
 points = []
 r = 4 # Sphere radius   
@@ -74,7 +74,7 @@ reached_tau = []
 reached_T = []
 reached_max = []
 reached_min = []
-for p in tqdm(points):
+for _, p in tqdm(enumerate(points)):
     '''
     Noise block configuration
 
@@ -234,6 +234,51 @@ for p in tqdm(points):
     xyz = np.nanmax(simulator.state[:, 0, 9:], axis = 0)
     reached_max.append(xyz * 1)
 
+    # Collect iod results
+    if _ == 0:
+        # Create iod files
+        # forces
+        f2iod = {}
+        for i, (key, mdl) in enumerate({'Fx':model.FxModel, 
+                                        'Fy':model.FyModel, 
+                                        'Fz':model.FzModel}.items()):
+            iod = model._get_iod(simulator.forces[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = False)
+            f2iod.update({key:iod})
+        # moments
+        m2iod = {}
+        for i, (key, mdl) in enumerate({'Mx':model.MxModel, 
+                                        'My':model.MyModel, 
+                                        'Mz':model.MzModel}.items()):
+            iod = model._get_iod(simulator.moments[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = False)
+            m2iod.update({key:iod})
+    else:
+        for i, (key, mdl) in enumerate({'Fx':model.FxModel, 
+                                        'Fy':model.FyModel, 
+                                        'Fz':model.FzModel}.items()):
+            iod = model._get_iod(simulator.forces[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = False)
+            for reg in iod.keys():
+                stacked_points = np.vstack([f2iod[key][reg]['points'], iod[reg]['points']])
+                f2iod[key][reg].update({'points':stacked_points})
+        for i, (key, mdl) in enumerate({'Mx':model.MxModel, 
+                                        'My':model.MyModel, 
+                                        'Mz':model.MzModel}.items()):
+            iod = model._get_iod(simulator.moments[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = False)
+            for reg in iod.keys():
+                stacked_points = np.vstack([m2iod[key][reg]['points'], iod[reg]['points']])
+                m2iod[key][reg].update({'points':stacked_points})
+
 
 
 reached_T = np.array(reached_T)
@@ -380,5 +425,7 @@ plt.subplots_adjust(
     hspace=0.2,
     wspace=0.2
 )
+
+fig_iod_f, fig_iod_m = plotting.plot_iod(model, simulator, f2iod=f2iod, m2iod=m2iod)
 
 plt.show()

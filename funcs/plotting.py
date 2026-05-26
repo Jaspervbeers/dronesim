@@ -11,6 +11,18 @@ from funcs.angleFuncs import QuatRot, Eul2Quat
 from animation import animate as viz
 from animation import drone
 
+# Color palate:
+myOrange = '#e67d0a'
+myBlue = '#008bb4'
+myGreen = 'mediumseagreen'
+myYellow = '#ffbe3c'
+myRed = 'firebrick'
+myGrey = 'gainsboro'
+myVelvet = 'mediumvioletred'
+myOrangeRed = '#E5340B'
+myPurple = 'mediumorchid'
+
+
 def prettifyAxis(ax):
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
@@ -60,6 +72,17 @@ def addHLINE(ax, y, xmin, xmax, **kwargs):
     ax.hlines(y, xmin, xmax, **kwargs)
     ax.set_xlim(xlim)
 
+def makeBoldLabel(label):
+    '''
+    Make a label bold
+    '''
+    split = label.split(' ')
+    boldSplit = []
+    for s in split:
+        boldSplit.append(r'$\mathbf{' + s + r'}$')
+    boldLabel = ' '.join(boldSplit)
+    return boldLabel
+
 
 def addBoxAroundPoint(ax, point, deltaX = None, deltaY = None, boxAnnotation = None, annotationXY = None, **kwargs):
     if deltaX is None:
@@ -71,6 +94,142 @@ def addBoxAroundPoint(ax, point, deltaX = None, deltaY = None, boxAnnotation = N
         if annotationXY is None:
             annotationXY = (point[0] - deltaX, point[1] + deltaY)
         ax.annotate(boxAnnotation, annotationXY, fontsize = 12, verticalalignment = 'top')
+
+
+def plot_iod(model, simulator, f2iod = None, m2iod = None, convex_iod = False):
+    # Forces
+    skip = False
+    if f2iod is None:
+        f2iod = {}
+        fmax = 0
+        for i, (key, mdl) in enumerate({'Fx':model.FxModel, 
+                                        'Fy':model.FyModel, 
+                                        'Fz':model.FzModel}.items()):
+            iod = model._get_iod(simulator.forces[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = convex_iod)
+            if iod is None:
+                skip = True
+                break
+            fmax = len(iod) if len(iod) > fmax else fmax
+            f2iod.update({key:iod})
+    else:
+        fmax = np.max([len(iod) for iod in f2iod.values()])
+    # Figure
+    if not skip:
+        figf = plt.figure(figsize=(10, 7))
+        gs = figf.add_gridspec(nrows = 3, ncols = fmax)
+        axshadow = figf.add_subplot(gs[0, :])
+        handles = []
+        addLegendPatch(handles, color = myGreen, label = 'Model response', alpha = 0.8)
+        addLegendLine(handles, color = myGrey, label = 'Zero-line')
+        addLegendPatch(handles, facecolor = 'none', edgecolor = 'k', label = 'iod contour', linewidth = 2)
+        lgd = axshadow.legend(handles=handles, fontsize = 14,
+                            bbox_to_anchor=(0, 1.2, 1, 0.2), loc="lower left", mode="expand", ncol=2,  labelspacing = 0.8,  borderaxespad=0, handlelength = 3, columnspacing=1)
+        lgd._legend_box.align = "left"
+        axshadow.axis('off')
+        for i, (_MDL, iod_data) in enumerate(f2iod.items()):
+            Regressors = iod_data.keys()
+            for j, reg in enumerate(Regressors):
+                if j == 0:
+                    ax = figf.add_subplot(gs[i, j])
+                    axRef = ax
+                    ax.set_ylabel(makeBoldLabel(f'{_MDL[0]}_{_MDL[1]}'), fontsize = 14)
+                else:
+                    ax = figf.add_subplot(gs[i, j], sharey = axRef)
+                    plt.setp(ax.get_yticklabels(), visible = False)
+                ax.scatter(iod_data[reg]['points'][:, 0], iod_data[reg]['points'][:, 1], color = myGreen, alpha = 0.1, s = 1, zorder = 20, rasterized = True)
+                # ax.plot(iod_data[reg]['points'][:, 0], iod_data[reg]['points'][:, 1], color = myGreen, alpha = 0.7, zorder = 20)
+                ax.plot(iod_data[reg]['hull'][:, 0], iod_data[reg]['hull'][:, 1], color = 'k', linewidth = 2)
+                (xmin, xmax) = ax.get_xlim()
+                ax.set_xticks([xmin, xmax])
+                (ymin, ymax) = ax.get_ylim()
+                addVLINE(ax, 0, ymin-10, ymax+10, color = myGrey, zorder = 1)
+                if i == 0:
+                    ax.set_title(makeBoldLabel(f'Regressor {j+1}'))
+                # plotter.prettifyAxis(ax)
+                # ax.legend(loc = 'best', labels = [reg])
+                hndls = []
+                addLegendPatch(hndls, facecolor = 'none', edgecolor = 'none', label = lmapper(reg))
+                ax.legend(loc = 'best', handles = hndls)
+        figf.supxlabel(makeBoldLabel('Regressor contribution') + ', N', fontsize = 14)
+        plt.tight_layout()
+    else:
+        figf = None
+        print('Force IODs are None. Cannot plot.')
+    # Moments
+    skip = False
+    if m2iod is None:
+        m2iod = {}
+        mmax = 0
+        for i, (key, mdl) in enumerate({'Mx':model.MxModel, 
+                                        'My':model.MyModel, 
+                                        'Mz':model.MzModel}.items()):
+            iod = model._get_iod(simulator.moments[:, 0, :][:, i], 
+                                simulator.state[:, 0, :], 
+                                simulator.inputs[:, 0, :], 
+                                mdl, convex = convex_iod)
+            if iod is None:
+                skip = True
+                break
+            mmax = len(iod) if len(iod) > mmax else mmax
+            m2iod.update({key:iod})
+    else:
+        mmax = np.max([len(iod) for iod in m2iod.values()])
+    if not skip:
+        # Figure 
+        figm = plt.figure(figsize=(10, 7))
+        gs = figm.add_gridspec(nrows = 3, ncols = mmax)
+        axshadow = figm.add_subplot(gs[0, :])
+        handles = []
+        addLegendPatch(handles, color = myGreen, label = 'Model response', alpha = 0.8)
+        addLegendLine(handles, color = myGrey, label = 'Zero-line')
+        addLegendPatch(handles, facecolor = 'none', edgecolor = 'k', label = 'iod contour', linewidth = 2)
+        lgd = axshadow.legend(handles=handles, fontsize = 14,
+                            bbox_to_anchor=(0, 1.2, 1, 0.2), loc="lower left", mode="expand", ncol=2,  labelspacing = 0.8,  borderaxespad=0, handlelength = 3, columnspacing=1)
+        lgd._legend_box.align = "left"
+        axshadow.axis('off')
+        for i, (_MDL, iod_data) in enumerate(m2iod.items()):
+            Regressors = iod_data.keys()
+            for j, reg in enumerate(Regressors):
+                if j == 0:
+                    ax = figm.add_subplot(gs[i, j])
+                    axRef = ax
+                    ax.set_ylabel(makeBoldLabel(f'{_MDL[0]}_{_MDL[1]}'), fontsize = 14)
+                else:
+                    ax = figm.add_subplot(gs[i, j], sharey = axRef)
+                    plt.setp(ax.get_yticklabels(), visible = False)
+                ax.scatter(iod_data[reg]['points'][:, 0], iod_data[reg]['points'][:, 1], color = myGreen, alpha = 0.1, s = 1, zorder = 20, rasterized = True)
+                # ax.plot(iod_data[reg]['points'][:, 0], iod_data[reg]['points'][:, 1], color = myGreen, alpha = 0.7, zorder = 20)
+                ax.plot(iod_data[reg]['hull'][:, 0], iod_data[reg]['hull'][:, 1], color = 'k', linewidth = 2)
+                (xmin, xmax) = ax.get_xlim()
+                ax.set_xticks([xmin, xmax])
+                (ymin, ymax) = ax.get_ylim()
+                addVLINE(ax, 0, ymin-10, ymax+10, color = myGrey, zorder = 1)
+                if i == 0:
+                    ax.set_title(makeBoldLabel(f'Regressor {j+1}'))
+                # plotter.prettifyAxis(ax)
+                hndls = []
+                addLegendPatch(hndls, facecolor = 'none', edgecolor = 'none', label = lmapper(reg))
+                ax.legend(loc = 'best', handles = hndls)
+        figm.supxlabel(makeBoldLabel('Regressor contribution') + ', N', fontsize = 14)
+        plt.tight_layout()
+    else:
+        figm = None
+        print('Moment IODs are None. Cannot plot.')
+    return figf, figm
+
+def lmapper(reg):
+    lreg = reg.replace('(w2_1 + w2_2 + w2_3 + w2_4)', r'\sum_{i=1}^{4}\omega^{2}_{i}')
+    lreg = lreg.replace('((|u| + |v|)^(2))*(w^(1.0))', r'{[|u| + |v|]}^{2}*w')
+    lreg = lreg.replace(' ', '')
+    lreg = lreg.replace('(', '{').replace(')', "}")
+    lreg = lreg.replace('w_tot', r'\omega_{tot}')
+    lreg = lreg.replace('.0', '')
+    lreg = lreg.replace('*', r' \cdot ')
+    lreg = lreg.replace('[', '(').replace(']', ')')
+    return makeBoldLabel(lreg)
 
 
 def plotResults(simulator, savePath):
@@ -218,27 +377,9 @@ def plotResults(simulator, savePath):
     fig.savefig(os.path.join(savePath, 'moments.png'), dpi = 600)
     fig.savefig(os.path.join(savePath, 'moments.pdf'))
 
-
-# # Look at regressor contributions 
-# modelInputs = model.FzModel.droneGetModelInput(state[:, 0, :], rotorSpeeds[:, 0, :])
-# _m = model.FzModel
-# # _m = model.FxModel
-# # _m = model.FyModel
-# # _m = model.MzModel
-# allRegressors = [r for r in _m.regressors]
-# allCoefficients = [c for c in _m.coefficients.__array__()[:, 0]]
-# fig = plt.figure(figsize=(10, 10))
-# ax = fig.add_subplot(111)
-# ax.plot(np.ones(modelInputs.shape[0])*_m.coefficients[0].__array__()[0][0], label = 'bias') # Bias contribution
-# for r in range(len(allRegressors)):
-#     _m.regressors = allRegressors[:r+1]
-#     _m.coefficients = np.matrix(allCoefficients[:r+2]).T
-#     ax.plot(_m.predict(modelInputs), label = _m.polynomial[r+1])
-
-# ax.legend()
-# ax.set_xlabel(r'$\mathbf{Time}$ [s]')
-# ax.set_ylabel(r'$\mathbf{Force}$ $\mathbf{(Moment)}$ [N] ([Nm])')
-# # Reset regressors
-# _m.regressors = allRegressors
-# _m.coefficients = np.matrix(allCoefficients).T
-# plt.show()
+    # iod plots
+    figf, figm = plot_iod(simulator.simVars['model'], simulator)
+    figf.savefig(os.path.join(savePath, 'iod_force.png'), dpi = 600)
+    figf.savefig(os.path.join(savePath, 'iod_force.pdf'))
+    figm.savefig(os.path.join(savePath, 'iod_moment.png'), dpi = 600)
+    figm.savefig(os.path.join(savePath, 'iod_moment.pdf'))

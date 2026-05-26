@@ -4,20 +4,24 @@ Class which imports and makes use of the identified drone model
 Created by Jasper van Beers
 Contact: j.j.vanbeers@tudelft.nl
 Date: 09-02-2022
+
+Modified: 05-09-2025 (Added json model compatibility)
 '''
+# Global imports
 import os
 import dill as pickle
 import numpy as np
 import json
-from scipy.misc import derivative
+
+# Local imports
+from models import jsonModelHelper
 
 class model:
-	def __init__(self, path = None, modelID = None, NoOffset = False):
+	def __init__(self, path = None, modelID = None, NoOffset = False, loadDiffSys = False):
 		# If no path to model folder specified, take default model
 		if path is None:
 			cwd = os.getcwd()
-			# self.modelID = 'MDL-MetalBeetle-Indoor-022022-001'
-			self.modelID = 'MDL-HDBeetle-NN-II-NGP003'
+			self.modelID = 'HDBeetle-14'
 			self.modelPath = os.path.join(cwd, 'models', self.modelID)
 		else:
 			self.modelPath = path
@@ -26,13 +30,18 @@ class model:
 			else:
 				self.modelID = modelID
 				self.modelPath = os.path.join(path, modelID)
-		# Load models
-		self.FxModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fx.pkl'))
-		self.FyModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fy.pkl'))
-		self.FzModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fz.pkl'))
-		self.MxModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Mx.pkl'))
-		self.MyModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-My.pkl'))
-		self.MzModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Mz.pkl'))
+		try:
+			# Load models
+			self.loadModels()
+		except Exception as e:
+			print(f'[ WARNING ] Failed to load some of the portable .pkl models. Maybe there is a Python version inconsistency.')
+			if os.path.exists(f'{self.modelPath}/{self.modelID}.json'):
+				print('Attempting to build new portable model from .json model...')
+				jsonModel = jsonModelHelper.jsonDroneModel(self.modelPath, self.modelID)
+				jsonModel.toPortable(jsonModelHelper.DronePolynomialModel)
+				self.loadModels()
+			else:
+				raise e
 		# Get drone params
 		self.droneParams = self.FxModel.droneParams
 		self._simplifiedModel = None
@@ -47,10 +56,21 @@ class model:
 		self.setOffsets()
 		# Check if there is a derivative system available
 		self.DiffSys = None
-		if os.path.exists(os.path.join(self.modelPath, 'PQR-DiffSys.pkl')):
-			self.DiffSys = self._loadModels(os.path.join(self.modelPath, 'PQR-DiffSys.pkl'))
+		if loadDiffSys:
+			if os.path.exists(os.path.join(self.modelPath, 'PQR-DiffSys.pkl')):
+				self.DiffSys = self._loadModels(os.path.join(self.modelPath, 'PQR-DiffSys.pkl'))
+			else:
+				raise ValueError(f'Attempted to import DiffSys but there is no DiffSys file (PQR-DiffSys.pkl) in {self.modelPath}.')
 		return None
 
+
+	def loadModels(self):
+		self.FxModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fx.pkl'))
+		self.FyModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fy.pkl'))
+		self.FzModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Fz.pkl'))
+		self.MxModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Mx.pkl'))
+		self.MyModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-My.pkl'))
+		self.MzModel = self._loadModels(os.path.join(self.modelPath, self.modelID + '-Mz.pkl'))
 
 	def _loadModels(self, path):
 		with open(path, 'rb') as f:
@@ -174,129 +194,169 @@ class model:
 		return omega[idxHover][0]
 
 
-	def linearize(self, x, u, dxs = None, dus = None):
-		if dxs is None:
-			dxs = x.copy().reshape(-1)[:9]
-			dxs[:3] = 0.1 # Attitude, radians
-			dxs[3:6] = 0.1 # Velocity, radians
-			dxs[6:] = np.sqrt(0.1) # Rate, radians
-		if dus is None:
-			dus = u.copy().reshape(-1)[:4]
-			dus[:] = 100
-		self.LinearFx = _linearModel(self.FxModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fx0, modelType = 'force')
-		self.LinearFy = _linearModel(self.FyModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fy0, modelType = 'force')
-		self.LinearFz = _linearModel(self.FzModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fz0, modelType = 'force')
-		self.LinearMx = _linearModel(self.MxModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Mx0, modelType = 'moment')
-		self.LinearMy = _linearModel(self.MyModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.My0, modelType = 'moment')
-		self.LinearMz = _linearModel(self.MzModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Mz0, modelType = 'moment')
+	def _get_iod_hulls(self, fm_mdl, convex = False, try_alt = True):
+		iod = fm_mdl.IOD
+		if iod is not None:
+			hulls = {}
+			if convex:
+				if 'convex' in iod.keys():
+					hulls = iod['convex']
+				else:
+					print(f'[ WARNING ] Could not find convex hull in IOD.')
+					if try_alt:
+						hulls = self._get_iod_hulls(fm_mdl, convex = not convex, try_alt=False)
+			else:
+				if 'concave' in iod.keys():
+					hulls = iod['concave']
+				else:
+					print(f'[ WARNING ] Could not find concave hull in IOD.')
+					if try_alt:
+						hulls = self._get_iod_hulls(fm_mdl, convex = not convex, try_alt=False)
+			return hulls
+		else:
+			return None
+		
+
+	def _get_iod(self, preds, states, inputs, fm_mdl, convex = False):
+		idata = fm_mdl.droneGetModelInput(states, inputs)
+		hulls = self._get_iod_hulls(fm_mdl, convex = convex)
+		if hulls is not None:
+			reg2iod = {}
+			for reg, coeff, v in zip(['bias'] + fm_mdl.regressors, fm_mdl.coefficients, fm_mdl.polynomial):
+				if v != 'bias':
+					Xn = np.array(reg.resolve(idata)).reshape(-1) * np.array(coeff).reshape(-1)
+					_proj = np.vstack([Xn, np.array(preds).reshape(-1)]).T
+					hull = np.array(hulls[v]['hull'])
+					contour = np.vstack([hull, hull[0:1]]) if hull.shape[0] > 0 else hull
+					reg2iod.update({v:{'hull':contour, 'points':_proj, 'ratio':hulls[v]['ratio']}})
+			return reg2iod
+		else:
+			return None
+
+
+	# def linearize(self, x, u, dxs = None, dus = None):
+	# 	if dxs is None:
+	# 		dxs = x.copy().reshape(-1)[:9]
+	# 		dxs[:3] = 0.1 # Attitude, radians
+	# 		dxs[3:6] = 0.1 # Velocity, radians
+	# 		dxs[6:] = np.sqrt(0.1) # Rate, radians
+	# 	if dus is None:
+	# 		dus = u.copy().reshape(-1)[:4]
+	# 		dus[:] = 100
+	# 	self.LinearFx = _linearModel(self.FxModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fx0, modelType = 'force')
+	# 	self.LinearFy = _linearModel(self.FyModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fy0, modelType = 'force')
+	# 	self.LinearFz = _linearModel(self.FzModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Fz0, modelType = 'force')
+	# 	self.LinearMx = _linearModel(self.MxModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Mx0, modelType = 'moment')
+	# 	self.LinearMy = _linearModel(self.MyModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.My0, modelType = 'moment')
+	# 	self.LinearMz = _linearModel(self.MzModel, x, u, dxs, dus, self.getSignMask().T, modelBias = self.Mz0, modelType = 'moment')
 
 	
-	def getForcesMoments_linear(self, simVars):
-		step = simVars['currentTimeStep_index']
-		# We use the true state here (instead of noisy) since this is where the system really is. 
-		state = simVars['state'][step][:, :9]
-		# NOTE: trueAction is step+1 since we just updated actuator information in sim loop. (i.e. latest actuator info)
-		trueAction = simVars['inputs'][step+1]
+	# def getForcesMoments_linear(self, simVars):
+	# 	step = simVars['currentTimeStep_index']
+	# 	# We use the true state here (instead of noisy) since this is where the system really is. 
+	# 	state = simVars['state'][step][:, :9]
+	# 	# NOTE: trueAction is step+1 since we just updated actuator information in sim loop. (i.e. latest actuator info)
+	# 	trueAction = simVars['inputs'][step+1]
 
-		# Make predictions
-		Fx = self.LinearFx.predict(state, trueAction)
-		Fy = self.LinearFy.predict(state, trueAction)
-		Fz = self.LinearFz.predict(state, trueAction)
-		Mx = self.LinearMx.predict(state, trueAction)
-		My = self.LinearMy.predict(state, trueAction)
-		Mz = self.LinearMz.predict(state, trueAction)
+	# 	# Make predictions
+	# 	Fx = self.LinearFx.predict(state, trueAction)
+	# 	Fy = self.LinearFy.predict(state, trueAction)
+	# 	Fz = self.LinearFz.predict(state, trueAction)
+	# 	Mx = self.LinearMx.predict(state, trueAction)
+	# 	My = self.LinearMy.predict(state, trueAction)
+	# 	Mz = self.LinearMz.predict(state, trueAction)
 
-		# Build force and moment vectors
-		F = (np.array([Fx, Fy, Fz])).reshape(1, -1)
-		M = (np.array([Mx, My, Mz])).reshape(1, -1)
+	# 	# Build force and moment vectors
+	# 	F = (np.array([Fx, Fy, Fz])).reshape(1, -1)
+	# 	M = (np.array([Mx, My, Mz])).reshape(1, -1)
 		
-		return F, M
+	# 	return F, M
 
 
-	def _linear2StateSpace(self):
-		'''
-		Returns a state space representation for the linearized models around point a, b in the form
-			dx_dot = A*dx + B*du 
-		where d denotes delta operator (i.e. dx = (x - a), du = (u - b), and dx_dot = (x_dot - f(a, b)))
-			-> Typically a, b is chosen such that f(a,b) = 0. But this is not always the case. 
-		NOTE: We also assume that derivative of attitude (roll, pitch, yaw) is approximately equal to p, q, r. 
-			-> Invovling the proper transformation added non-linearity. 
-			-> Hence, we assume that p, q, r are not changing rapidly 
-		Output:
-			- A matrix
-			- B matrix
-			- C matrix
-			- D matrix 
-			- Deltas (vector of f(a,b) to add to dY = Cx + Du to obtain true Y)
-		'''
-		# x = [roll, pitch, yaw, u, v, w, p, q, r]
-		# dx = [p, q, r, ax, ay, az, p_dot, q_dot, r_dot]
-		# 	Linearized models give back forces and moments, so we need to apply appropriate scaling according to droneParams
+	# def _linear2StateSpace(self):
+	# 	'''
+	# 	Returns a state space representation for the linearized models around point a, b in the form
+	# 		dx_dot = A*dx + B*du 
+	# 	where d denotes delta operator (i.e. dx = (x - a), du = (u - b), and dx_dot = (x_dot - f(a, b)))
+	# 		-> Typically a, b is chosen such that f(a,b) = 0. But this is not always the case. 
+	# 	NOTE: We also assume that derivative of attitude (roll, pitch, yaw) is approximately equal to p, q, r. 
+	# 		-> Invovling the proper transformation added non-linearity. 
+	# 		-> Hence, we assume that p, q, r are not changing rapidly 
+	# 	Output:
+	# 		- A matrix
+	# 		- B matrix
+	# 		- C matrix
+	# 		- D matrix 
+	# 		- Deltas (vector of f(a,b) to add to dY = Cx + Du to obtain true Y)
+	# 	'''
+	# 	# x = [roll, pitch, yaw, u, v, w, p, q, r]
+	# 	# dx = [p, q, r, ax, ay, az, p_dot, q_dot, r_dot]
+	# 	# 	Linearized models give back forces and moments, so we need to apply appropriate scaling according to droneParams
 		
-		# Build A matrix
-		# Attitudes -> roll_dot, pitch_dot, yaw_dot = p, q, r
-		A_att = np.zeros((3, 9))
-		A_att[0, 6] = 1 # roll_dot = p
-		A_att[1, 7] = 1	# pitch_dot = q
-		A_att[2, 8] = 1 # yaw_dot = r
+	# 	# Build A matrix
+	# 	# Attitudes -> roll_dot, pitch_dot, yaw_dot = p, q, r
+	# 	A_att = np.zeros((3, 9))
+	# 	A_att[0, 6] = 1 # roll_dot = p
+	# 	A_att[1, 7] = 1	# pitch_dot = q
+	# 	A_att[2, 8] = 1 # yaw_dot = r
 
-		# Velocities -> ax, ay, az
-		A_vel = np.zeros((3, 9))
-		accFactor = 1/self.droneParams['m']
+	# 	# Velocities -> ax, ay, az
+	# 	A_vel = np.zeros((3, 9))
+	# 	accFactor = 1/self.droneParams['m']
 
-		# Rates -> 
-		A_rates = np.zeros((3, 9))
-		invIv = np.linalg.inv(self.droneParams['Iv'])
+	# 	# Rates -> 
+	# 	A_rates = np.zeros((3, 9))
+	# 	invIv = np.linalg.inv(self.droneParams['Iv'])
 
-		for col in range(9):
-			# Velocities
-			A_vel[0, col] = accFactor*self.LinearFx.fx[col]
-			A_vel[1, col] = accFactor*self.LinearFy.fx[col]
-			A_vel[2, col] = accFactor*self.LinearFz.fx[col]
+	# 	for col in range(9):
+	# 		# Velocities
+	# 		A_vel[0, col] = accFactor*self.LinearFx.fx[col]
+	# 		A_vel[1, col] = accFactor*self.LinearFy.fx[col]
+	# 		A_vel[2, col] = accFactor*self.LinearFz.fx[col]
 
-			# Rates
-			A_rates[0, col] = np.matmul(invIv[0, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
-			A_rates[1, col] = np.matmul(invIv[1, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
-			A_rates[2, col] = np.matmul(invIv[2, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
+	# 		# Rates
+	# 		A_rates[0, col] = np.matmul(invIv[0, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
+	# 		A_rates[1, col] = np.matmul(invIv[1, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
+	# 		A_rates[2, col] = np.matmul(invIv[2, :], np.array([self.LinearMx.fx[col], self.LinearMy.fx[col], self.LinearMz.fx[col]]))
 
-		A = np.vstack((A_att, A_vel, A_rates))
+	# 	A = np.vstack((A_att, A_vel, A_rates))
 
-		# Build B matrix
-		B = np.zeros((9, 4))
+	# 	# Build B matrix
+	# 	B = np.zeros((9, 4))
 
-		# Inputs do not influence roll_dot, pitch_dot, and yaw_dot, so remain at zero
-		for col in range(4):
-			# Accelerations
-			B[3, col] = accFactor*self.LinearFx.fu[col]
-			B[4, col] = accFactor*self.LinearFy.fu[col]
-			B[5, col] = accFactor*self.LinearFz.fu[col]
+	# 	# Inputs do not influence roll_dot, pitch_dot, and yaw_dot, so remain at zero
+	# 	for col in range(4):
+	# 		# Accelerations
+	# 		B[3, col] = accFactor*self.LinearFx.fu[col]
+	# 		B[4, col] = accFactor*self.LinearFy.fu[col]
+	# 		B[5, col] = accFactor*self.LinearFz.fu[col]
 
-			# Rates
-			B[6, col] = np.matmul(invIv[0, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
-			B[7, col] = np.matmul(invIv[1, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
-			B[8, col] = np.matmul(invIv[2, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
+	# 		# Rates
+	# 		B[6, col] = np.matmul(invIv[0, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
+	# 		B[7, col] = np.matmul(invIv[1, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
+	# 		B[8, col] = np.matmul(invIv[2, :], np.array([self.LinearMx.fu[col], self.LinearMy.fu[col], self.LinearMz.fu[col]]))
 
-		# Construct C and D to return true delta forces (i.e. ignoring f(a, b) and any additional biases)
-		C = np.zeros((6, 9))
-		C[0, 3] = self.droneParams['m']
-		C[1, 4] = self.droneParams['m']
-		C[2, 5] = self.droneParams['m']
-		C[3:, 6:] = self.droneParams['Iv']
+	# 	# Construct C and D to return true delta forces (i.e. ignoring f(a, b) and any additional biases)
+	# 	C = np.zeros((6, 9))
+	# 	C[0, 3] = self.droneParams['m']
+	# 	C[1, 4] = self.droneParams['m']
+	# 	C[2, 5] = self.droneParams['m']
+	# 	C[3:, 6:] = self.droneParams['Iv']
 
-		D = np.zeros((6, 4))
+	# 	D = np.zeros((6, 4))
 
-		# Construct final bias/delta vector
-		Deltas = np.zeros((6, 1))
-		Deltas[0] = self.LinearFx.f0 - self.LinearFx.bias
-		Deltas[1] = self.LinearFy.f0 - self.LinearFy.bias
-		Deltas[2] = self.LinearFz.f0 - self.LinearFz.bias
-		Deltas[3] = self.LinearMx.f0 - self.LinearMx.bias
-		Deltas[4] = self.LinearMy.f0 - self.LinearMy.bias
-		Deltas[5] = self.LinearMz.f0 - self.LinearMz.bias
+	# 	# Construct final bias/delta vector
+	# 	Deltas = np.zeros((6, 1))
+	# 	Deltas[0] = self.LinearFx.f0 - self.LinearFx.bias
+	# 	Deltas[1] = self.LinearFy.f0 - self.LinearFy.bias
+	# 	Deltas[2] = self.LinearFz.f0 - self.LinearFz.bias
+	# 	Deltas[3] = self.LinearMx.f0 - self.LinearMx.bias
+	# 	Deltas[4] = self.LinearMy.f0 - self.LinearMy.bias
+	# 	Deltas[5] = self.LinearMz.f0 - self.LinearMz.bias
 
-		self.LinearModelStateSpace = (A, B, C, D, Deltas)
+	# 	self.LinearModelStateSpace = (A, B, C, D, Deltas)
 
-		return A, B, C, D, Deltas
+	# 	return A, B, C, D, Deltas
 
 
 	def setOffsets(self):
@@ -304,12 +364,12 @@ class model:
 			try:
 				with open(os.path.join(self.modelPath, 'FMOffsets.json'), 'r') as f:
 					FMOffsets = json.load(f)
-				self.Fx0 = np.float(FMOffsets['Fx0'])
-				self.Fy0 = np.float(FMOffsets['Fy0'])
-				self.Fz0 = np.float(FMOffsets['Fz0'])				
-				self.Mx0 = np.float(FMOffsets['Mx0'])
-				self.My0 = np.float(FMOffsets['My0'])
-				self.Mz0 = np.float(FMOffsets['Mz0'])
+				self.Fx0 = float(FMOffsets['Fx0'])
+				self.Fy0 = float(FMOffsets['Fy0'])
+				self.Fz0 = float(FMOffsets['Fz0'])				
+				self.Mx0 = float(FMOffsets['Mx0'])
+				self.My0 = float(FMOffsets['My0'])
+				self.Mz0 = float(FMOffsets['Mz0'])
 			except FileNotFoundError:
 				self.setZeroOffset()
 		else:
@@ -348,52 +408,52 @@ class model:
 		return None
 
 
-class _linearModel:
+# class _linearModel:
 
-	def __init__(self, model, xa, ub, dxs, dus, signMask, order = 3, modelBias = 0, modelType = 'force'):
-		if modelType.lower() not in ['force', 'moment']:
-			raise ValueError(f'_linearModel: Expected modelType of "force" or "moment" but {modelType} passed')
-		xin = model.droneGetModelInput(xa, ub)
-		if modelType.lower() == 'force':
-			self.modelNorm = float(np.array(xin['F_den']).reshape(-1))
-		elif modelType.lower() == 'moment':
-			self.modelNorm = float(np.array(xin['M_den']).reshape(-1))
-		self.bias = modelBias
-		self.signMask = signMask
-		self.xa = xa
-		self.ub = ub
-		self.model = model
-		self.f0 = model.predict(xin).__array__()[0][0]
-		fx = []
-		for i, (xi, dxi) in enumerate(zip(xa[0, :], dxs)):
-			fx.append(derivative(self.wrapx, xi, n = 1, dx = dxi, order = order, args = (i,)))
-		self.fx = np.array(fx) 
-		fu = []
-		for i, (ui, dui) in enumerate(zip(ub[0, :], dus)):
-			fu.append(derivative(self.wrapu, ui, n = 1, dx = dui, order = order, args = (i,)))
-		self.fu = np.array(fu)
+# 	def __init__(self, model, xa, ub, dxs, dus, signMask, order = 3, modelBias = 0, modelType = 'force'):
+# 		if modelType.lower() not in ['force', 'moment']:
+# 			raise ValueError(f'_linearModel: Expected modelType of "force" or "moment" but {modelType} passed')
+# 		xin = model.droneGetModelInput(xa, ub)
+# 		if modelType.lower() == 'force':
+# 			self.modelNorm = float(np.array(xin['F_den']).reshape(-1))
+# 		elif modelType.lower() == 'moment':
+# 			self.modelNorm = float(np.array(xin['M_den']).reshape(-1))
+# 		self.bias = modelBias
+# 		self.signMask = signMask
+# 		self.xa = xa
+# 		self.ub = ub
+# 		self.model = model
+# 		self.f0 = model.predict(xin).__array__()[0][0]
+# 		fx = []
+# 		for i, (xi, dxi) in enumerate(zip(xa[0, :], dxs)):
+# 			fx.append(derivative(self.wrapx, xi, n = 1, dx = dxi, order = order, args = (i,)))
+# 		self.fx = np.array(fx) 
+# 		fu = []
+# 		for i, (ui, dui) in enumerate(zip(ub[0, :], dus)):
+# 			fu.append(derivative(self.wrapu, ui, n = 1, dx = dui, order = order, args = (i,)))
+# 		self.fu = np.array(fu)
 
-	def __call__(self, x, u):
-		return self.predict(x, u)
+# 	def __call__(self, x, u):
+# 		return self.predict(x, u)
 
-	def predict(self, x, u):
-		dx = x - self.xa
-		du = u - self.ub
-		fx = np.nansum((dx.reshape(-1)*self.fx))
-		fu = np.nansum((du.reshape(-1)*self.fu))
-		return (self.f0 + fx + fu - self.bias)/self.modelNorm
+# 	def predict(self, x, u):
+# 		dx = x - self.xa
+# 		du = u - self.ub
+# 		fx = np.nansum((dx.reshape(-1)*self.fx))
+# 		fu = np.nansum((du.reshape(-1)*self.fu))
+# 		return (self.f0 + fx + fu - self.bias)/self.modelNorm
 
-	def wrapx(self, x, idx):
-		xa = self.xa.copy()
-		xa[:, idx] = x
-		xin = self.model.droneGetModelInput(xa, self.ub)
-		return self.model.predict(xin).__array__()[0][0]
+# 	def wrapx(self, x, idx):
+# 		xa = self.xa.copy()
+# 		xa[:, idx] = x
+# 		xin = self.model.droneGetModelInput(xa, self.ub)
+# 		return self.model.predict(xin).__array__()[0][0]
 
-	def wrapu(self, y, idx):
-		ub = self.ub.copy()
-		ub[:, idx] = y
-		xin = self.model.droneGetModelInput(self.xa, ub)
-		return self.model.predict(xin).__array__()[0][0]
+# 	def wrapu(self, y, idx):
+# 		ub = self.ub.copy()
+# 		ub[:, idx] = y
+# 		xin = self.model.droneGetModelInput(self.xa, ub)
+# 		return self.model.predict(xin).__array__()[0][0]
 
 
 class simpleModel:
@@ -470,63 +530,3 @@ class simpleModel:
 		M = np.array(M).reshape(1, -1)
 
 		return F, M
-
-# class _linearModel:
-
-# 	def __init__(self, model, xa, ub, dxs, dUs, signMask, order = 3, modelBias = 0, modelType = 'force'):
-# 		if modelType.lower() not in ['force', 'moment']:
-# 			raise ValueError(f'_linearModel: Expected modelType of "force" or "moment" but {modelType} passed')
-# 		xin = model.droneGetModelInput(xa, ub)
-# 		if modelType.lower() == 'force':
-# 			self.modelNorm = float(np.array(xin['F_den']).reshape(-1))
-# 		elif modelType.lower() == 'moment':
-# 			self.modelNorm = float(np.array(xin['M_den']).reshape(-1))
-# 		self.bias = modelBias
-# 		self.model = model
-# 		self.signMask = signMask
-# 		self.xa = xa
-# 		self.ub = ub
-# 		self.Ub = self.mapU(ub)
-# 		self.f0 = model.predict(xin).__array__()[0][0]
-# 		fx = []
-# 		for i, (xi, dxi) in enumerate(zip(xa[0, :], dxs)):
-# 			fx.append(derivative(self.wrapx, xi, n = 1, dx = dxi, order = order, args = (i,)))
-# 		self.fx = np.array(fx) 
-# 		fu = []
-# 		for i, (ui, dui) in enumerate(zip(self.Ub[0, :], dUs)):
-# 			fu.append(derivative(self.wrapu, ui, n = 1, dx = dui, order = order, args = (i,)))
-# 		self.fu = np.array(fu)
-
-# 	def __call__(self, x, u):
-# 		return self.predict(x, u)
-
-# 	def predict(self, x, u):
-# 		dx = x - self.xa
-# 		du = self.mapU(u) - self.Ub
-# 		fx = np.nansum((dx.reshape(-1)*self.fx))
-# 		fu = np.nansum((du.reshape(-1)*self.fu))
-# 		return (self.f0 + fx + fu - self.bias)/self.modelNorm
-
-# 	def wrapx(self, x, idx):
-# 		xa = self.xa.copy()
-# 		xa[:, idx] = x
-# 		xin = self.model.droneGetModelInput(xa, self.ub)
-# 		return self.model.predict(xin).__array__()[0][0]
-
-# 	def wrapu(self, y, idx):
-# 		Ub = self.ub.copy()
-# 		Ub[:, idx] = y
-# 		ub = self.unmapU(Ub)
-# 		xin = self.model.droneGetModelInput(self.xa, ub)
-# 		return self.model.predict(xin).__array__()[0][0]
-
-# 	def mapU(self, u):
-# 		controlMoments = np.matmul(self.signMask, u.reshape(4, 1)).reshape(-1)
-# 		omegaTotal = np.nansum(u)
-# 		U = np.hstack((controlMoments, omegaTotal)).reshape(-1, 4)
-# 		return U
-
-# 	def unmapU(self, U):
-# 		signMask = np.vstack((self.signMask, np.ones(4)))
-# 		u = np.matmul(np.linalg.inv(signMask), U.reshape(4, 1)).reshape(1, 4)
-# 		return u
