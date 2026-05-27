@@ -83,7 +83,7 @@ class body:
             artists.update({'lineArmRotor':lineArmRotor})
 
             # Rotor plane
-            Patch = self.makeCircle((0, 0), self.R, alpha = self.mapRPMtoAlpha(omega[:, ra.id - 1]), **self.rotorPlotKwargs)
+            Patch = self.makeCircle((0, 0), self.R, alpha = self.mapRPMtoAlpha(omega[:, ra.id - 1].__array__()[0]), **self.rotorPlotKwargs)
             ax.add_patch(Patch)
             path = Patch.get_path() #Get the path and the associated transform
             trans = Patch.get_patch_transform()
@@ -148,7 +148,7 @@ class body:
             verts3D = artists['_rp_verts'].copy()
             vertsNew = QuatRot(np.vstack((self.quat,)*len(verts3D)), verts3D, rot = 'B2E')
             artists['rotorPlane']._segment3d = vertsNew.reshape(-1, 3) + ra.rotor.origin.reshape(-1)
-            artists['rotorPlane'].set_alpha(self.mapRPMtoAlpha(omega[:, ra.id - 1]))
+            artists['rotorPlane'].set_alpha(self.mapRPMtoAlpha(omega[:, ra.id - 1].__array__()[0]))
             artists['rotorPlane'].set_color(self.rotorPlotKwargs['color'])
 
         # Update body reference frame
@@ -187,7 +187,7 @@ class body:
                 **self.bodyPlotKwargs)
             
             # Update rotors
-            Patch = self.makeCircle((0, 0), self.R, alpha = self.mapRPMtoAlpha(omega[:, ra.id - 1]), **self.rotorPlotKwargs)
+            Patch = self.makeCircle((0, 0), self.R, alpha = self.mapRPMtoAlpha(omega[:, ra.id - 1].__array__()[0]), **self.rotorPlotKwargs)
             ax.add_patch(Patch)
             path = Patch.get_path() #Get the path and the associated transform
             trans = Patch.get_patch_transform()
